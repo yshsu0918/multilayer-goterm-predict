@@ -1,6 +1,6 @@
-import torch 
-import torch.nn.functional as F
+import torch
 from torch import nn
+from torch.nn import functional as F
 
 def get_block(dim_in, dim_out, kernel, stride, pad):
     block = nn.Sequential(
@@ -20,7 +20,7 @@ def get_add(dim_in, dim_out, kernel, stride, pad):
     return block 
 
 class GoModel(nn.Module):
-    def __init__(self, label_size, hidden_size, dim_in=8):
+    def __init__(self, label_size, hidden_size, code_size, k_hop, dim_in=8):
         super(GoModel, self).__init__()
         self.hidden_size = hidden_size
         self.init_block = nn.Sequential(
@@ -47,28 +47,3 @@ class GoModel(nn.Module):
         outs = outs.contiguous().view(-1, outs.size(-1))[positions].squeeze(0)
         
         return torch.sigmoid(self.fc(outs))
-
-
-class NetA(torch.nn.Module):
-    def __init__(self, args, n_feature, n_hidden, n_output):
-        super(NetA, self).__init__()
-        self.hidden = torch.nn.Linear(n_feature, n_hidden).to(args.device)   # hidden layer
-        self.out = torch.nn.Linear(n_hidden, n_output).to(args.device)   # output layer
-
-
-    def forward(self, x):
-        x = F.relu(self.hidden(x))      # activation function for hidden layer
-        x = self.out(x)
-        return x
-
-
-class NetB(torch.nn.Module):
-    def __init__(self, args, n_feature, n_hidden, n_output):
-        super(NetB, self).__init__()
-        self.hidden = torch.nn.Linear(n_feature, n_hidden).to(args.device)   # hidden layer
-        self.out = torch.nn.Linear(n_hidden, n_output).to(args.device)   # output layer
-
-    def forward(self, x):
-        x = F.relu(self.hidden(x))      # activation function for hidden layer
-        x = F.softmax(self.out(x))
-        return x

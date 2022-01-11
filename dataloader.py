@@ -2,10 +2,59 @@ import pickle
 import torch 
 import torch.nn.functional as F
 from torch.utils.data import Dataset,DataLoader
+from boardprocess import GetBoard
+import numpy as np
+
+class DataGoModel(Dataset):
+    def __init__(self, DataBtarget, eng,eng_abbrs, ratio = 0.9, is_train = True, input_training_pickle = ''):
+        self.data = []
+        self.label = []
+        self.other_info = []
+
+        training_data = []
+        with open(input_training_pickle, 'rb') as fin:
+            training_data = pickle.load(fin)
+
+        if is_train:
+            begin = 0
+            end = int(len(training_data)*ratio)
+        else:
+            begin = int(len(training_data)*ratio) + 1
+            end = -1
+
+        for item in training_data[begin:end]:
+            data_buf = []
+            for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
+                data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
+
+            
+            sgf_str = item['sgf_content']
+            Black1, White1, Black2, White2, Board, position = GetBoard(sgf_str)
+            
+            data_buf.append(Black1)
+            data_buf.append(White1)
+            data_buf.append(Black2)
+            data_buf.append(White2)
+
+            
+            label_buf = [ ]
+            for term in DataBtarget[eng]:
+                label_buf.append( 1 if (eng in item['specific_terms']) and (term in item['specific_terms'][eng]) else 0 )
+
+            self.label.append( label_buf )
+            self.data.append( (data_buf, position ) )
+
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor([ self.data[index][0] ]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor([self.label[index]])
+
 
 
 class DataA(Dataset):
-    def __init__(self, eng_abbrs= [], begin=0,end=-1, input_training_pickle = ''):
+    def __init__(self, eng_abbrs= [], ratio = 0.9, is_train =True, input_training_pickle = ''):
         training_data = []
         with open(input_training_pickle, 'rb') as fin:
             training_data = pickle.load(fin)
@@ -17,11 +66,16 @@ class DataA(Dataset):
         for i in range(3):
             print(training_data[i]['sgf_content'], training_data[i]['order_tags'], training_data[i]['specific_terms'])
             
-
-
         self.data = []
         self.label = []
         self.other_info = []
+
+        if is_train:
+            begin = 0
+            end = int(len(training_data)*ratio)
+        else:
+            begin = int(len(training_data)*ratio) + 1
+            end = -1
 
         for item in training_data[begin:end]:
             data_buf = []
@@ -34,8 +88,10 @@ class DataA(Dataset):
             for i in range(len(eng_abbrs)):
                 label_buf.append( 1 if eng_abbrs[i] in item['order_tags'] else 0 )
             
-            self.label.append(label_buf)
 
+
+
+            self.label.append(label_buf)
             self.other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
 
         self.data = torch.FloatTensor(self.data)    
@@ -55,13 +111,21 @@ class DataA(Dataset):
 
 
 class DataB(Dataset):
-    def __init__(self,DataBtarget, eng, eng_abbrs= [], begin=0,end=-1, input_training_pickle = ''):
+    def __init__(self,DataBtarget, eng, eng_abbrs= [], ratio = 0.9, is_train = True, input_training_pickle = ''):
         training_data = []
         with open(input_training_pickle, 'rb') as fin:
             training_data = pickle.load(fin)
         self.data = []
         self.label = []
-        
+
+
+        if is_train:
+            begin = 0
+            end = int(len(training_data)*ratio)
+        else:
+            begin = int(len(training_data)*ratio) + 1
+            end = -1
+
         for item in training_data[begin:end]:
             data_buf = []
             for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:

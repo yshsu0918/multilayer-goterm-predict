@@ -30,6 +30,9 @@ def cal_DataBtarget(args, eng_abbrs,terms_cut_threshold=0.5):
             if eng_abbrs[i] in item['specific_terms']:
                 for term in item['specific_terms'][eng_abbrs[i]]:
                     #print(eng_abbrs[i],term)
+                    if term == '接':
+                        continue
+
                     if term not in stat[eng_abbrs[i]]:
                         stat[eng_abbrs[i]][term] = 1
                     else:                            
@@ -42,10 +45,50 @@ def cal_DataBtarget(args, eng_abbrs,terms_cut_threshold=0.5):
         #buf = buf[0 : int(len(buf)**terms_cut_threshold)]
         DataBtarget[k] = [ x[0] for x in buf]
         print(k , DataBtarget[k])
+        print(buf)
     return DataBtarget
 
 
 
+def trainB_GoModel(args):
+    print('Training B...')
+    eng_abbrs = args.eng_abbrs
+    nets = []
+    DataBtarget = cal_DataBtarget(args, eng_abbrs)
+    for eng in eng_abbrs :
+        print('DataB traindataloader')
+        _DataB = DataB(DataBtarget, eng = eng, eng_abbrs = eng_abbrs, ratio = 1, is_train = True, input_training_pickle = args.input_training_pickle)
+        traindataloader = DataLoader(dataset=_DataB,
+                                    batch_size=1,
+                                    shuffle=True)
+
+        net = GoModel(label_size=len(DataBtarget[eng]), hidden_size=args.hidden_size)
+        
+        optimizer = torch.optim.Adam( net.parameters(), lr= 0.02 , weight_decay=3e-4)
+        loss_func = torch.nn.BCELoss()  #
+
+        for epoch in range(args.epochB):
+
+            for step, (data, label) in enumerate(traindataloader):
+                data = data.to(args.device)
+                label = label.to(args.device)
+
+                output = net(data)          #把data丟進網路中
+                loss = loss_func(output, label)
+                
+                optimizer.zero_grad()      #計算loss,初始梯度
+                loss.backward()            #反向傳播
+                optimizer.step()       
+
+                if step % 100 == 0:
+                    print('Epoch:', epoch, '|step:', step, '|train loss:%.4f'%loss.data)
+
+                #每100steps輸出一次train loss
+            print('Epoch:', epoch, '|train loss:%.4f'%loss.data)
+
+        nets.append((eng,net))
+    return nets, DataBtarget
+                    
 
 
 def trainA(args):
@@ -53,11 +96,11 @@ def trainA(args):
     #current_eng_abbr = [ch2abbr[k] for k in ch2abbr.keys()]
     current_eng_abbr = args.eng_abbrs
     print('DataA traindataloader')
-    traindataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, begin= 0, end =25000, input_training_pickle = args.input_training_pickle),
+    traindataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, ratio = 0.9, is_train = True, input_training_pickle = args.input_training_pickle),
                             batch_size=1,
                             shuffle=True)
     print('DataA testdataloader')
-    testdataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, begin= 25000, end =27000, input_training_pickle = args.input_training_pickle),
+    testdataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, ratio = 0.9, is_train = False, input_training_pickle = args.input_training_pickle),
                             batch_size=1,
                             shuffle=False)
     net = NetA(args,n_feature=2890, n_hidden=256, n_output=len(current_eng_abbr))     # define the network
@@ -113,8 +156,8 @@ def trainB(args):
     nets = []
     DataBtarget = cal_DataBtarget(args, eng_abbrs)
     for eng in eng_abbrs :
-        print('DataB traindataloader')
-        _DataB = DataB(DataBtarget, eng = eng, eng_abbrs = eng_abbrs, begin= 0, end = 400, input_training_pickle = args.input_training_pickle)
+        print('DataB traindataloader ', eng, eng_abbrs)
+        _DataB = DataB(DataBtarget, eng = eng, eng_abbrs = eng_abbrs, ratio = 1, is_train = True, input_training_pickle = args.input_training_pickle)
         traindataloader = DataLoader(dataset=_DataB,
                                     batch_size=1,
                                     shuffle=True)
@@ -152,7 +195,7 @@ def demo( args, Anet, Bnets, DataBtarget):
     thresholdA = 0.5
     # load data
     current_eng_abbr = list(DataBtarget.keys())
-    traindataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, begin= 27000, end =27050, input_training_pickle = args.input_training_pickle),
+    traindataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, ratio = 0.1, is_train = False, input_training_pickle = args.input_training_pickle),
                             batch_size=1,
                             shuffle=False)
 
@@ -227,7 +270,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', default = 'cuda:2')
     parser.add_argument('--train', default = 1, type = int)
     parser.add_argument('--epochA', default = 5, type = int)
-    parser.add_argument('--epochB', default = 5, type = int)
+    parser.add_argument('--epochB', default = 1, type = int)
     
     parser.add_argument('--input_training_pickle', default = '/mnt/nfs/work/yshsu0918/lal/other/test/lalwin_shortsentence_dataset_mei_class_training.pickle', type = str)
     parser.add_argument('--eng_abbrs', default = 'gt,ct,in,tn,if,at,df,gd,bd', type = str)
@@ -238,7 +281,9 @@ if __name__ == '__main__':
     print(args)
 
     if args.train:
-        Anet = trainA(args)
+        # Anet = trainA(args)
+        with open('Anet.pickle', 'rb') as fin:
+            Anet = pickle.load(fin)        
         Bnets, DataBtarget = trainB(args)
 
         with open('Anet.pickle', 'wb') as fout:
