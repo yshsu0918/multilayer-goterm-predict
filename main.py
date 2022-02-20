@@ -115,6 +115,10 @@ def trainA(args):
             data = data.to(args.device)
             label = label.to(args.device)
 
+            print(args.device)
+            print(type(data))
+            print(type(label))
+
             output = net(data)          #把data丟進網路中
             loss = loss_func(output, label)
             
@@ -196,7 +200,7 @@ def demo( args, Anet, Bnets, DataBtarget):
     # load data
     current_eng_abbr = list(DataBtarget.keys())
     traindataloader = DataLoader(dataset=DataA(eng_abbrs = current_eng_abbr, ratio = 0.1, is_train = False, input_training_pickle = args.input_training_pickle),
-                            batch_size=1,
+                            batch_size=64,
                             shuffle=False)
 
     demo_result_content = []
@@ -281,7 +285,7 @@ if __name__ == '__main__':
     print(args)
 
     if args.train:
-        # Anet = trainA(args)
+        Anet = trainA(args)
         with open('Anet.pickle', 'rb') as fin:
             Anet = pickle.load(fin)        
         Bnets, DataBtarget = trainB(args)

@@ -19,8 +19,9 @@ def get_add(dim_in, dim_out, kernel, stride, pad):
         )
     return block 
 
+
 class GoModel(nn.Module):
-    def __init__(self, label_size, hidden_size, dim_in=8):
+    def __init__(self, label_size, hidden_size, dim_in=12):
         super(GoModel, self).__init__()
         self.hidden_size = hidden_size
         self.init_block = nn.Sequential(
@@ -37,6 +38,7 @@ class GoModel(nn.Module):
         self.fc = nn.Linear(hidden_size, label_size)
 
     def forward(self, args, boards, positions):
+
         outs = self.init_block(boards)
         outs = F.relu(self.block1(outs) + self.add1(outs))
         outs = F.relu(self.block2(outs) + self.add2(outs))
