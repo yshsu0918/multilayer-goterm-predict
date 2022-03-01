@@ -5,6 +5,131 @@ from torch.utils.data import Dataset,DataLoader
 from boardprocess import GetBoard
 import numpy as np
 
+
+def pickle_reader(args):
+    print('@pickle reader')
+    def pickle_extractor(label, item):
+        data_buf = []
+        for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
+            data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
+        
+        sgf_str = item['sgf_content']
+        Board = item['Board']
+        position = item['position']
+
+        data_buf.append(item['Black1'])
+        data_buf.append(item['White1'])
+        data_buf.append(item['Black2'])
+        data_buf.append(item['White2'])
+
+        data_buf = np.stack(data_buf)
+        label_buf = np.array([ label ])
+        
+        return data_buf, position, label_buf
+
+    training_pickle_filepath = args.training_pickle_filepath
+    neg_training_pickle_filepath = args.neg_training_pickle_filepath
+
+    with open(training_pickle_filepath, 'rb') as fin:
+        training_data = pickle.load(fin)
+    with open(neg_training_pickle_filepath, 'rb') as fin:
+        neg_training_data = pickle.load(fin)            
+    
+    _data, _other_info = [],[]
+    eng_abbrs = []
+
+    Q = training_data + neg_training_data
+    for i, item in enumerate(Q):
+        if i % len(Q)//20 == 0:
+            print('#' ,end='', flush=True)
+        
+
+        data_buf, position, _ = pickle_extractor( 0 , item)
+
+        _data.append( (data_buf, position ) )
+        _other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
+        eng_abbrs.extend(item['order_tags'])
+
+    
+    eng_abbrs = list(set(eng_abbrs))
+    print('')
+    print(args.eng_abbrs, eng_abbrs)
+    data_dict = {}
+    for k in eng_abbrs:
+        data_dict[k] = {}
+        data_dict[k]['data'] = []
+        data_dict[k]['other_info'] = []
+        
+        
+
+    for data, other_info in zip ( _data, _other_info):
+        if other_info[1][0] in eng_abbrs:
+            k = other_info[1][0]
+            data_dict[k]['data'].append( data )
+            data_dict[k]['other_info'].append( other_info )
+            
+        else:
+            print('Error found some abbr not in list')
+
+    return data_dict, eng_abbrs
+
+
+
+class DataMulticlassGoModel(Dataset):
+    def __init__(self, args, eng, data_dict, ratio = 0.9, is_train = True, neg_sampling_k = 5):
+        def train_test_split(lst, ratio, is_train):
+            if is_train:
+                return lst[:int( len(lst) * ratio )]
+            else:
+                return lst[int( len(lst) * ratio ):]  
+
+        print('@DataMulticlassGoModel')
+        print('is_train', is_train, 'neg_sampling_k', neg_sampling_k)
+        
+
+        self.label, self.data, self.other_info = [], [], []
+        count_pos = 0 
+        count_neg = 0
+        for k in args.eng_abbrs:
+            print('unsplit', k, len(data_dict[k]['data']))
+
+            _data = train_test_split(data_dict[k]['data'], ratio, is_train)
+            _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)
+            
+            
+            if k == eng:
+                _label = [ np.array([ 1 ]) for info in _other_info]
+                count_pos += len(_label)
+            else:
+                _label = [ np.array([ 0 ]) for info in _other_info]
+                count_neg += len(_label)
+
+            self.label.extend( _label )
+            self.data.extend( _data )
+            self.other_info.extend( _other_info )
+
+        print(count_pos, count_neg, neg_sampling_k)
+        remain_need = max(count_pos*neg_sampling_k - count_neg, 0)
+
+        print('count_pos',count_pos, 'count_neg',count_neg,'remain_need',remain_need)
+        _data = train_test_split( data_dict['neg']['data'], ratio, is_train)[:remain_need]
+        _other_info = train_test_split( data_dict['neg']['other_info'], ratio, is_train)[:remain_need]
+        _label = [ np.array([ 0 ]) for info in _other_info]
+
+        print('len neg _label', len(_label))
+
+        self.label.extend( _label)
+        self.data.extend( _data )
+        self.other_info.extend( _other_info )
+
+        print('len self.label', len(self.label))
+                
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
+
 class DataNegSampleGoModel(Dataset):
     def __init__(self, eng, ratio = 0.9, is_train = True, training_pickle_filepath = '', neg_training_pickle_filepath = '', neg_sampling_k = 5):
         def pickle_extractor(eng, item):
