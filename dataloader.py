@@ -4,28 +4,41 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset,DataLoader
 from boardprocess import GetBoard
 import numpy as np
+import hashlib
 
+def train_test_split(lst, ratio, is_train):
+    if is_train:
+        return lst[:int( len(lst) * ratio )]
+    else:
+        return lst[int( len(lst) * ratio ):]  
+
+
+def getmd5(mystr):
+    return hashlib.md5(mystr.encode('utf-8')).hexdigest()
+
+
+def pickle_extractor(label, item):
+    data_buf = []
+    for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
+        data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
+        
+    sgf_str = item['sgf_content']
+    Board = item['Board']
+    position = item['position']
+
+    data_buf.append(item['Black1'])
+    data_buf.append(item['White1'])
+    data_buf.append(item['Black2'])
+    data_buf.append(item['White2'])
+
+    data_buf = np.stack(data_buf)
+    label_buf = np.array([ label ])
+        
+    return data_buf, position, label_buf
 
 def pickle_reader(args):
     print('@pickle reader')
-    def pickle_extractor(label, item):
-        data_buf = []
-        for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
-            data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
-        
-        sgf_str = item['sgf_content']
-        Board = item['Board']
-        position = item['position']
 
-        data_buf.append(item['Black1'])
-        data_buf.append(item['White1'])
-        data_buf.append(item['Black2'])
-        data_buf.append(item['White2'])
-
-        data_buf = np.stack(data_buf)
-        label_buf = np.array([ label ])
-        
-        return data_buf, position, label_buf
 
     training_pickle_filepath = args.training_pickle_filepath
     neg_training_pickle_filepath = args.neg_training_pickle_filepath
@@ -60,9 +73,7 @@ def pickle_reader(args):
         data_dict[k]['data'] = []
         data_dict[k]['other_info'] = []
         
-        
-
-    for data, other_info in zip ( _data, _other_info):
+    for data, other_info in zip( _data, _other_info):
         if other_info[1][0] in eng_abbrs:
             k = other_info[1][0]
             data_dict[k]['data'].append( data )
@@ -73,15 +84,129 @@ def pickle_reader(args):
 
     return data_dict, eng_abbrs
 
+class TestMulticlassGoModel(Dataset):
+
+
+    def __init__(self, args, eng_abbrs, data_dict, ratio = 0.9, is_train = False):
+        self.label, self.data, self.other_info = [], [], []
+        count_pos = 0 
+        count_neg = 0        
+        for k in eng_abbrs:
+            print('unsplit', k, len(data_dict[k]['data']))
+
+            _data = train_test_split(data_dict[k]['data'], ratio, is_train)
+            _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)
+            _label = [ np.array([ 0 ]) for info in _other_info]
+            
+            
+            self.label.extend( _label )
+            self.data.extend( _data )
+            self.other_info.extend( _other_info )                
+
+        print('len self.label', len(self.label))
+        print(count_pos, count_neg)
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
+
+
+class DataMulticlass1v1GoModel(Dataset):
+    def make_weights_for_balanced_classes(self, nclasses= 2):                        
+        count = [0] * nclasses
+        images = self.label                                                 
+        for item in images:                                                         
+            count[item[0]] += 1                                                     
+        weight_per_class = [0.] * nclasses                                      
+        N = float(sum(count))                                                   
+        for i in range(nclasses):                                                   
+            weight_per_class[i] = N/float(count[i])                                 
+        weight = [0] * len(images)                                              
+        for idx, val in enumerate(images):                                          
+            weight[idx] = weight_per_class[val[0]]                                  
+        return weight
+
+    def __init__(self, args, enga,engb, data_dict, ratio = 0.9, is_train = True,auto_balance = True):
+        self.label, self.data, self.other_info = [], [], []
+        count_pos = 0 
+        count_neg = 0        
+        for k in [enga, engb]:
+            print('unsplit', k, len(data_dict[k]['data']))
+
+            _data = train_test_split(data_dict[k]['data'], ratio, is_train)
+            _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)
+
+            if k == enga:
+                _label = [ np.array([ 1 ]) for info in _other_info]
+                count_pos += len(_label)
+            else:
+                _label = [ np.array([ 0 ]) for info in _other_info]
+                count_neg += len(_label)
+            
+            self.label.extend( _label )
+            self.data.extend( _data )
+            self.other_info.extend( _other_info )                
+
+        print('len self.label', len(self.label))
+        print(count_pos, count_neg)
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
+
+class DataMulticlassFixedNegGoModel(Dataset):
+    def __init__(self, args, eng, data_dict, ratio = 0.9, is_train = True):
+
+        print('@DataMulticlassFixedNegGoModel')
+        print('is_train', is_train)
+        
+
+        self.label, self.data, self.other_info = [], [], []
+        count_pos = 0 
+        count_neg = 0
+
+        neg_fix_num = max( [ len(train_test_split(data_dict[k]['data'], ratio, is_train)) for k in args.eng_abbrs ] )
+        
+        for k in args.eng_abbrs + ['neg']:
+            print('unsplit', k, len(data_dict[k]['data']))
+
+            if k == 'neg':
+                _data = train_test_split(data_dict[k]['data'], ratio, is_train)[:neg_fix_num]
+                _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)[:neg_fix_num]
+            else:
+                _data = train_test_split(data_dict[k]['data'], ratio, is_train)
+                _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)
+            
+            
+            if k == eng:
+                _label = [ np.array([ 1 ]) for info in _other_info]
+                count_pos += len(_label)
+            else:
+                # continue
+                _label = [ np.array([ 0 ]) for info in _other_info]
+                count_neg += len(_label)
+
+            self.label.extend( _label )
+            self.data.extend( _data )
+            self.other_info.extend( _other_info )
+
+        print('len self.label', len(self.label))
+        print(count_pos, count_neg)
+        
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
 
 
 class DataMulticlassGoModel(Dataset):
     def __init__(self, args, eng, data_dict, ratio = 0.9, is_train = True, neg_sampling_k = 5):
-        def train_test_split(lst, ratio, is_train):
-            if is_train:
-                return lst[:int( len(lst) * ratio )]
-            else:
-                return lst[int( len(lst) * ratio ):]  
 
         print('@DataMulticlassGoModel')
         print('is_train', is_train, 'neg_sampling_k', neg_sampling_k)
@@ -101,6 +226,7 @@ class DataMulticlassGoModel(Dataset):
                 _label = [ np.array([ 1 ]) for info in _other_info]
                 count_pos += len(_label)
             else:
+                # continue
                 _label = [ np.array([ 0 ]) for info in _other_info]
                 count_neg += len(_label)
 
@@ -112,8 +238,9 @@ class DataMulticlassGoModel(Dataset):
         remain_need = max(count_pos*neg_sampling_k - count_neg, 0)
 
         print('count_pos',count_pos, 'count_neg',count_neg,'remain_need',remain_need)
-        _data = train_test_split( data_dict['neg']['data'], ratio, is_train)[:remain_need]
-        _other_info = train_test_split( data_dict['neg']['other_info'], ratio, is_train)[:remain_need]
+        Q = len(train_test_split( data_dict['neg']['data'], ratio, is_train))
+        _data = train_test_split( data_dict['neg']['data'], ratio, is_train)[Q-remain_need:]
+        _other_info = train_test_split( data_dict['neg']['other_info'], ratio, is_train)[Q-remain_need:]
         _label = [ np.array([ 0 ]) for info in _other_info]
 
         print('len neg _label', len(_label))
@@ -123,12 +250,21 @@ class DataMulticlassGoModel(Dataset):
         self.other_info.extend( _other_info )
 
         print('len self.label', len(self.label))
-                
+    
+    def traindatapreview(self):
+        content = ''
+        for item, label in zip(self.data,self.label):
+            content += '{} {}\n'.format( label, getmd5(item.__str__()) )
+        with open('DataMulticlassGoModel_traindata.preview', 'w') as fout:
+            fout.write(content)
+        
+
     def __len__(self):
         return len(self.data)
         
     def __getitem__(self, index):
         return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
+
 
 class DataNegSampleGoModel(Dataset):
     def __init__(self, eng, ratio = 0.9, is_train = True, training_pickle_filepath = '', neg_training_pickle_filepath = '', neg_sampling_k = 5):
@@ -183,19 +319,19 @@ class DataNegSampleGoModel(Dataset):
             self.label = _label[:positive_sample_size]
             self.data = _data[:positive_sample_size]
             self.other_info = _other_info[:positive_sample_size]
-            print('is_train (T)', is_train, 'len(self.label)', len(self.label) )
+            print('is_train {}:{}'.format( 0, positive_sample_size), 'len(self.label)', len(self.label) )
         else:
             self.label = _label[positive_sample_size:]
             self.data = _data[positive_sample_size:]
             self.other_info = _other_info[positive_sample_size:]
-            print('is_train (F)', is_train, 'len(self.label)', len(self.label) )
+            print('is_test {}:{}'.format( positive_sample_size, -1) , 'len(self.label)', len(self.label) )
         
         if is_train:
             _neg_training_data = neg_training_data[0: positive_sample_size*neg_sampling_k]
-            print('is_train (T) NEG', is_train, 'len(_neg_training_data)', len(_neg_training_data))
+            print('is_train NEG {}:{}'.format( 0, positive_sample_size*neg_sampling_k), 'len(_neg_training_data)', len(_neg_training_data))
         else:
             _neg_training_data = neg_training_data[len(neg_training_data) - len(self.label)*neg_sampling_k: ]
-            print('is_train (F) NEG', is_train, 'len(_neg_training_data)', len(_neg_training_data))
+            print('is_test NEG {}:{}'.format( len(neg_training_data) - len(self.label)*neg_sampling_k, -1), 'len(_neg_training_data)', len(_neg_training_data))
         
         for item in _neg_training_data:
             if 'neg' not in item['order_tags']:
@@ -206,7 +342,12 @@ class DataNegSampleGoModel(Dataset):
             self.data.append( (data_buf, position ) )
             self.other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
 
-        
+    def traindatapreview(self):
+        content = ''
+        for item, label in zip(self.data,self.label):
+            content += '{} {}\n'.format( label, getmd5(item.__str__()) )
+        with open('DataNegSampleGoModel_traindata.preview', 'w') as fout:
+            fout.write(content)        
 
     def __len__(self):
         return len(self.data)
