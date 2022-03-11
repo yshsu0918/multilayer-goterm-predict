@@ -20,3 +20,14 @@ def draw_auc(targets, predicts, savefig_filename='auc.png'):
     plt.xlabel('False Positive Rate')
     plt.savefig(savefig_filename)
     plt.close()
+
+def total_hit_topk(outputs, label, k):
+    hit = 0
+    for row in range(len(outputs)):
+        # top k
+        _, indices = outputs[row].topk(k, dim = 0, largest = True, sorted = True)
+        for j in range(len(indices)):
+            if label[row][indices[j].item()].item() == 1.0:
+                hit += 1
+                break
+    return hit

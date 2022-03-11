@@ -1,3 +1,4 @@
+from cProfile import label
 import pickle
 import torch 
 import torch.nn.functional as F
@@ -5,7 +6,7 @@ from torch.utils.data import Dataset,DataLoader
 from boardprocess import GetBoard
 import numpy as np
 import hashlib
-
+import random
 def train_test_split(lst, ratio, is_train):
     if is_train:
         return lst[:int( len(lst) * ratio )]
@@ -16,6 +17,27 @@ def train_test_split(lst, ratio, is_train):
 def getmd5(mystr):
     return hashlib.md5(mystr.encode('utf-8')).hexdigest()
 
+
+    # if is_train == False and test_shuffle:
+    #     random.shuffle(shuffle_lst)
+    # _data = [ x[0] for x in shuffle_lst][ : neg_sampling_amount ]
+    # _other_info = [ x[1] for x in shuffle_lst] [ : neg_sampling_amount ]
+
+def shuffletwolst(lsta, lstb, outdim=-1):
+    if outdim == -1:
+        outdim == len(lsta)
+
+    shuffle_lst = [(a,b) for a,b in zip(lsta,lstb)]
+    random_indexes = []
+
+    while len(random_indexes) != outdim:
+        new_sample = random.randint(0, len(shuffle_lst)-1)
+        if new_sample not in random_indexes:
+            random_indexes.append(new_sample)
+        else:
+            pass    
+
+    return [ shuffle_lst[idx][0] for idx in random_indexes], [ shuffle_lst[idx][1] for idx in random_indexes]
 
 def pickle_extractor(label, item):
     data_buf = []
@@ -32,32 +54,36 @@ def pickle_extractor(label, item):
     data_buf.append(item['White2'])
 
     data_buf = np.stack(data_buf)
-    label_buf = np.array([ label ])
+    label_buf = np.array( label )
         
     return data_buf, position, label_buf
 
-def pickle_reader(args):
+def pickle_reader(args, shuffle=False, need_neg = True):
     print('@pickle reader')
-
-
-    training_pickle_filepath = args.training_pickle_filepath
-    neg_training_pickle_filepath = args.neg_training_pickle_filepath
-
-    with open(training_pickle_filepath, 'rb') as fin:
-        training_data = pickle.load(fin)
-    with open(neg_training_pickle_filepath, 'rb') as fin:
-        neg_training_data = pickle.load(fin)            
-    
     _data, _other_info = [],[]
     eng_abbrs = []
 
-    Q = training_data + neg_training_data
+
+
+    with open(args.training_pickle_filepath, 'rb') as fin:
+        training_data = pickle.load(fin)
+
+    if need_neg:
+        with open( args.neg_training_pickle_filepath, 'rb') as fin:
+            neg_training_data = pickle.load(fin)            
+        Q = training_data + neg_training_data
+    else:
+        Q = training_data
+
+    if shuffle:
+        print('shuffle all dataset')
+        random.shuffle(Q)
+        
     for i, item in enumerate(Q):
         if i % len(Q)//20 == 0:
             print('#' ,end='', flush=True)
-        
 
-        data_buf, position, _ = pickle_extractor( 0 , item)
+        data_buf, position, _ = pickle_extractor( [0] , item)
 
         _data.append( (data_buf, position ) )
         _other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
@@ -66,7 +92,7 @@ def pickle_reader(args):
     
     eng_abbrs = list(set(eng_abbrs))
     print('')
-    print(args.eng_abbrs, eng_abbrs)
+    # print('args', args.eng_abbrs, 'data_dict key', eng_abbrs)
     data_dict = {}
     for k in eng_abbrs:
         data_dict[k] = {}
@@ -84,8 +110,7 @@ def pickle_reader(args):
 
     return data_dict, eng_abbrs
 
-class TestMulticlassGoModel(Dataset):
-
+class TestMulticlassGoModel(Dataset): #for cross compare , between models 
 
     def __init__(self, args, eng_abbrs, data_dict, ratio = 0.9, is_train = False):
         self.label, self.data, self.other_info = [], [], []
@@ -265,95 +290,95 @@ class DataMulticlassGoModel(Dataset):
     def __getitem__(self, index):
         return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
 
-
-class DataNegSampleGoModel(Dataset):
-    def __init__(self, eng, ratio = 0.9, is_train = True, training_pickle_filepath = '', neg_training_pickle_filepath = '', neg_sampling_k = 5):
-        def pickle_extractor(eng, item):
-            data_buf = []
-            for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
-                data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
+# class DataNegSampleGoModel(Dataset):
+#     def __init__(self, eng, ratio = 0.9, is_train = True, training_pickle_filepath = '', neg_training_pickle_filepath = '', neg_sampling_k = 5):
+#         def pickle_extractor(eng, item):
+#             data_buf = []
+#             for dict_key in ['Policy1', 'Policy2', 'BV1', 'BV2', 'Connect1', 'Connect2', 'Eye1', 'Eye2']:
+#                 data_buf.append( np.array([ float(x) for x in item[dict_key] ]).reshape((19,19)) )
             
-            sgf_str = item['sgf_content']
-            Board = item['Board']
-            position = item['position']
+#             sgf_str = item['sgf_content']
+#             Board = item['Board']
+#             position = item['position']
 
-            data_buf.append(item['Black1'])
-            data_buf.append(item['White1'])
-            data_buf.append(item['Black2'])
-            data_buf.append(item['White2'])
+#             data_buf.append(item['Black1'])
+#             data_buf.append(item['White1'])
+#             data_buf.append(item['Black2'])
+#             data_buf.append(item['White2'])
 
-            data_buf = np.stack(data_buf)
-            if eng == 'neg':
-                label_buf = np.array([ 0 ])
-            else:
-                label_buf = np.array([ 1 ])
+#             data_buf = np.stack(data_buf)
+#             if eng == 'neg':
+#                 label_buf = np.array([ 0 ])
+#             else:
+#                 label_buf = np.array([ 1 ])
             
-            return data_buf, position, label_buf
+#             return data_buf, position, label_buf
     
-        with open(training_pickle_filepath, 'rb') as fin:
-            training_data = pickle.load(fin)
-        with open(neg_training_pickle_filepath, 'rb') as fin:
-            neg_training_data = pickle.load(fin)
+#         with open(training_pickle_filepath, 'rb') as fin:
+#             training_data = pickle.load(fin)
+#         with open(neg_training_pickle_filepath, 'rb') as fin:
+#             neg_training_data = pickle.load(fin)
 
-        # print(training_data[15])
+#         # print(training_data[15])
 
 
 
-        _label, _data, _other_info = [],[],[]
-        for item in training_data:
-            if eng not in item['order_tags']:
-                continue                
-            data_buf, position, label_buf = pickle_extractor(eng, item)
+#         _label, _data, _other_info = [],[],[]
+#         for item in training_data:
+#             if eng not in item['order_tags']:
+#                 continue                
+#             data_buf, position, label_buf = pickle_extractor(eng, item)
 
-            _label.append( label_buf )
-            _data.append( (data_buf, position ) )
-            _other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
+#             _label.append( label_buf )
+#             _data.append( (data_buf, position ) )
+#             _other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
 
-        positive_sample_size = int ( len(_label) * ratio )
-        print('eng', eng)
-        print('positive_sample_size', positive_sample_size )
-        print('len(_label)', len(_label))
-        print('ratio', ratio)
-        print('neg_training_data', len(neg_training_data))
-        if is_train:
-            self.label = _label[:positive_sample_size]
-            self.data = _data[:positive_sample_size]
-            self.other_info = _other_info[:positive_sample_size]
-            print('is_train {}:{}'.format( 0, positive_sample_size), 'len(self.label)', len(self.label) )
-        else:
-            self.label = _label[positive_sample_size:]
-            self.data = _data[positive_sample_size:]
-            self.other_info = _other_info[positive_sample_size:]
-            print('is_test {}:{}'.format( positive_sample_size, -1) , 'len(self.label)', len(self.label) )
+#         positive_sample_size = int ( len(_label) * ratio )
+#         print('eng', eng)
+#         print('positive_sample_size', positive_sample_size )
+#         print('len(_label)', len(_label))
+#         print('ratio', ratio)
+#         print('neg_training_data', len(neg_training_data))
+#         if is_train:
+#             self.label = _label[:positive_sample_size]
+#             self.data = _data[:positive_sample_size]
+#             self.other_info = _other_info[:positive_sample_size]
+#             print('is_train {}:{}'.format( 0, positive_sample_size), 'len(self.label)', len(self.label) )
+#         else:
+#             self.label = _label[positive_sample_size:]
+#             self.data = _data[positive_sample_size:]
+#             self.other_info = _other_info[positive_sample_size:]
+#             print('is_test {}:{}'.format( positive_sample_size, -1) , 'len(self.label)', len(self.label) )
         
-        if is_train:
-            _neg_training_data = neg_training_data[0: positive_sample_size*neg_sampling_k]
-            print('is_train NEG {}:{}'.format( 0, positive_sample_size*neg_sampling_k), 'len(_neg_training_data)', len(_neg_training_data))
-        else:
-            _neg_training_data = neg_training_data[len(neg_training_data) - len(self.label)*neg_sampling_k: ]
-            print('is_test NEG {}:{}'.format( len(neg_training_data) - len(self.label)*neg_sampling_k, -1), 'len(_neg_training_data)', len(_neg_training_data))
+#         if is_train:
+#             _neg_training_data = neg_training_data[0: positive_sample_size*neg_sampling_k]
+#             print('is_train NEG {}:{}'.format( 0, positive_sample_size*neg_sampling_k), 'len(_neg_training_data)', len(_neg_training_data))
+#         else:
+#             _neg_training_data = neg_training_data[len(neg_training_data) - len(self.label)*neg_sampling_k: ]
+#             print('is_test NEG {}:{}'.format( len(neg_training_data) - len(self.label)*neg_sampling_k, -1), 'len(_neg_training_data)', len(_neg_training_data))
         
-        for item in _neg_training_data:
-            if 'neg' not in item['order_tags']:
-                continue                
-            data_buf, position, label_buf = pickle_extractor('neg', item)
+#         for item in _neg_training_data:
+#             if 'neg' not in item['order_tags']:
+#                 continue                
+#             data_buf, position, label_buf = pickle_extractor('neg', item)
 
-            self.label.append( label_buf )
-            self.data.append( (data_buf, position ) )
-            self.other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
+#             self.label.append( label_buf )
+#             self.data.append( (data_buf, position ) )
+#             self.other_info.append((item['sgf_content'], item['order_tags'], item['specific_terms']))
 
-    def traindatapreview(self):
-        content = ''
-        for item, label in zip(self.data,self.label):
-            content += '{} {}\n'.format( label, getmd5(item.__str__()) )
-        with open('DataNegSampleGoModel_traindata.preview', 'w') as fout:
-            fout.write(content)        
+#     def traindatapreview(self):
+#         content = ''
+#         for item, label in zip(self.data,self.label):
+#             content += '{} {}\n'.format( label, getmd5(item.__str__()) )
+#         with open('DataNegSampleGoModel_traindata.preview', 'w') as fout:
+#             fout.write(content)        
 
-    def __len__(self):
-        return len(self.data)
+#     def __len__(self):
+#         return len(self.data)
         
-    def __getitem__(self, index):
-        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index]), self.other_info
+#     def __getitem__(self, index):
+#         return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index]), self.other_info
+
 
 class DataGoModel(Dataset):
     def __init__(self, DataBtarget, eng,eng_abbrs, ratio = 0.9, is_train = True, input_training_pickle = ''):
@@ -502,3 +527,98 @@ class DataB(Dataset):
     def __len__(self):
         
         return len(self.data)
+
+
+class DataNegSampleGoModel(Dataset):
+    def __init__(self, args, eng, data_dict, ratio = 0.9, is_train = True, neg_sampling_k = 5, test_shuffle= True):
+
+        eng_abbrs = args.eng_abbrs
+        self.label, self.data, self.other_info = [], [], []
+        
+        
+        print('unsplit', eng, len(data_dict[eng]['data']), flush=True )
+
+        _data = train_test_split(data_dict[eng]['data'], ratio, is_train)
+        _other_info = train_test_split( data_dict[eng]['other_info'], ratio, is_train)
+        _label = [ np.array([ 1 ]) ]* len(_other_info)
+
+        print('pos ', len(_label))
+        
+        self.label.extend( _label )
+        self.data.extend( _data )
+        self.other_info.extend( _other_info )     
+
+        neg_sampling_amount = len(_label) * neg_sampling_k
+        print('unsplit', 'neg', len(data_dict['neg']['data']), flush=True )
+        
+        _data = train_test_split(data_dict['neg']['data'], ratio, is_train)[ : neg_sampling_amount]
+        _other_info = train_test_split( data_dict['neg']['other_info'], ratio, is_train)[ : neg_sampling_amount]
+        _label = [ np.array([ 0 ]) ] * len(_other_info)
+
+        print('neg ', len(_label))
+        self.label.extend( _label )
+        self.data.extend( _data )
+        self.other_info.extend( _other_info )     
+
+
+
+    def traindatapreview(self):
+        content = ''
+        for item, label in zip(self.data,self.label):
+            content += '{} {}\n'.format( label, getmd5(item.__str__()) )
+        with open('DataNegSampleGoModel_traindata.preview', 'w') as fout:
+            fout.write(content)        
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index]), self.other_info
+
+
+
+
+class DataSimpleTermGoModel(Dataset):
+    def __init__(self, args, data_dict, ratio = 0.9, is_train = True, test_shuffle= True):
+        pretrain_labels = ['', '超高目', '斷', '雙', '三目當中', '大壓梁', '衝', '跨', '五五', '挖', '小飛', '雙虎口', '三三', '猴子臉', '小目', '碰', '夾', '反扳', '扳', '超大飛', '刺', '小馬步掛', '天元', '小目二間高締', '自殺', '高目', '裂型', '迷你中國流布局', '拐', '長', '扭斷', '目外', '一間高夾', '門', '星位大馬步締', '象飛', '星位', '台象', '二間跳', '變形迷你中國流布局', '連扳', '小目小馬步締', '擠', '扳斷', '尖頂', '小目大馬步締', '向小目', '退', '穿象眼', '二間低夾', '星位二間高締', '錯小目無憂角布局', '點角', '二間高夾', '補方', '並', '虎口', '大飛', '三連星布局', '帶鉤', '空三角', '覷', '尖衝', '二連星布局', '連接', '雙飛燕', '二四侵分', '二五侵分', '一間高掛', '提劫', '車後推', '擋', '錯小目', '中國流布局', '星位小馬步締', '星位一間高締', '叫吃', '星無憂角布局', '小目一間高締', '小林流布局', '三間高夾', '填', '提', 'Make-Ko', '高中國流布局', '三間低夾', '頂', '尖', '點方', '一間低夾', '一間跳']
+        humantag_labels = ['星無憂角布局', '衝', '連接', '二間跳', '二間低夾', '蓋', '小目一間高締', '高目', '星位一間高締', '二間高掛', '二四侵分', '門', '星位', '象飛', '三連星布局', '一間低掛', '二間高夾', '斷', '點方', '小目', '超大飛', '星位大馬步締', '補方', '開拆', '尖頂', '撲', '尖衝', '目外', '長', '提劫', '逼', '打入', '扳', '小目二間高締', '迷你中國流布局', '扭斷', '跨', '扳斷', '夾', '雙飛燕', '空三角', '立下', '大飛', '超高目', '台象', '拐', '二間低掛', '猴子臉', '退', '阻渡', '穿象眼', '貼', '虎口', '一間高夾', '天元', '黏', '點角', '並', '雙虎口', '壓', '一間高掛', '小馬步掛', '填', '錯小目', '渡過', '托', '一間跳', '點', '一間低夾', '緊氣', '鎮', '星位小馬步締', '提', '團', '尖', '三間低夾', '淺消', '三目當中', '五五', '三間高夾', '反扳', '擠', '向小目', '二五侵分', '叫吃', '小目小馬步締', '三三', '二連星布局', '擋', '連扳', '覷', '碰', '頂', '挖', '雙', '刺', '小飛']
+        
+        self.target_labels = list(set(pretrain_labels + humantag_labels))
+        
+
+        self.label, self.data, self.other_info = [], [], []
+        _label, _data, _other_info = [],[],[]
+
+        print('total {} labels'.format(len(self.target_labels)))
+
+        for k in ['term']:
+            _data = train_test_split(data_dict[k]['data'], ratio, is_train)
+            _other_info = train_test_split( data_dict[k]['other_info'], ratio, is_train)
+            
+            for info in _other_info:
+                label_buf = [0]*len(self.target_labels)
+                for _term in info[2]['term']:
+                    label_buf[ self.target_labels.index(_term) ] = 1
+                _label.append(label_buf)
+
+
+        self.label.extend( _label )
+        self.data.extend( _data )
+        self.other_info.extend( _other_info )
+
+
+    def traindatapreview(self):
+        content = ''
+        for item, label in zip(self.data,self.label):
+            content += '{} {}\n'.format( label, getmd5(item.__str__()) )
+        with open('DataSimpleTermGoModel_traindata.preview', 'w') as fout:
+            fout.write(content)
+
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, index):
+        return torch.FloatTensor(self.data[index][0]), torch.LongTensor( [self.data[index][1]]) , torch.FloatTensor( self.label[index])
+
+
+
