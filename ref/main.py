@@ -1,4 +1,5 @@
 import numpy as np
+import random
 import json
 import torch as torch
 import torch.nn as nn
@@ -107,6 +108,15 @@ def run(epochs, trainLoader, testLoader, pretrain):
         else: print("Max Finetuned Testing accuracy:", max_acc, "\n")
         
 if __name__ == '__main__':
+    seed = 918
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
     parser = argparse.ArgumentParser(description = "None")
     parser.add_argument('-d', '--device', default = 'cuda')
     parser.add_argument('--epoch_pre', default = 2, type = int)
