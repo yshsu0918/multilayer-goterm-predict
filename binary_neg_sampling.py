@@ -1,237 +1,259 @@
-from itertools import accumulate
-import json
-import pickle
-import random
-import argparse
-import re
-import torch 
-import torch.nn.functional as F
-from torch.utils.data import Dataset,DataLoader
-from torch.autograd import Variable
-
-from dataloader import DataNegSampleGoModel, pickle_reader
-from model import GoModel
-
-from operator import itemgetter
-
 import numpy as np
+import json
+import torch as torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data as data
+from torch.autograd import Variable
+import argparse
 from analysis import draw_auc
+from model import GoModel_lal
+from dataloader import DataNegSample
+import pandas as pd
+import pickle
+import re
+def total_hit(outputs, label):
+    hit = 0
+    for row in range(len(outputs)):
+        _output = 1 if outputs[row].squeeze().tolist() > 0.5 else 0
 
-def train_Neg_B_GoModel(args,data_dict, neg_sampling_k = 5):
-    print('Training Neg Sampling...')
-    eng_abbrs = args.eng_abbrs
-    nets = []
-    for eng in eng_abbrs :
-        print('DataB traindataloader eng {} neg_sampling_k {}'.format(eng, neg_sampling_k),flush = True)
-        #(self, args, eng, data_dict, ratio = 0.9, is_train = True, neg_sampling_k = 5, test_shuffle= True)
-        _DataB = DataNegSampleGoModel(args,eng,data_dict,
-            ratio = 0.9, 
-            is_train = True, 
-            neg_sampling_k = neg_sampling_k)
+        # print(label[row].squeeze().tolist() , _output)
+
+        if label[row].squeeze().tolist() == _output:
+            hit+=1
+    return hit
+
+def train(epoch, Loader):
+    model.train()
+    total_loss = 0.0
+    total, hit = 0, 0
+
+    for step, (boards, positions, labels) in enumerate(Loader):
+        if step%5 == 0:
+            print('#', end='', flush=True)
+        boards = Variable(boards).to(args.device)
+        positions = Variable(positions).to(args.device)
+        labels = Variable(labels).to(args.device)
+        
+        optim.zero_grad()
+        outs = model(args, boards, positions)
+        loss = loss_fn(outs, labels)
+        loss.backward()
+        optim.step()
+        total_loss += loss.item()
+
+        # evaluate
+        total += len(outs)
+        hit += total_hit(outs, labels)
+        
+    print("###############################")
+    print("Training")
+    print("Epoch:", epoch) 
+    print("Loss:", total_loss)
+    print("Training accuracy:", hit / total)         
+    print(hit, "/", total, "\n")
     
+def test(epoch, Loader, draw=False):
+    model.eval()
+    total, hit = 0, 0
+    predicts = []
+    targets = []    
+    for step, (boards, positions, labels) in enumerate(Loader):
+        boards = Variable(boards).to(args.device)
+        positions = Variable(positions).to(args.device)
+        labels = Variable(labels).to(args.device)
+        with torch.no_grad():
+            outs = model(args, boards, positions)
 
-        traindataloader = DataLoader(dataset=_DataB,
-                                    batch_size=32,
-                                    shuffle=True)
+        # evaluate
+        total += len(outs)
+        hit += total_hit(outs, labels)
 
-        net = GoModel(label_size = 1, hidden_size=256).to(args.device)
-        optimizer = torch.optim.Adam( net.parameters(), lr= 1e-4 , weight_decay=3e-4)
-        loss_func = torch.nn.BCELoss()  #
-
-        for epoch in range(args.epochB):
-            accumulate_loss = 0
-            for step, (data, pos, label, _) in enumerate(traindataloader):
-                data = Variable(data).to(args.device)
-                pos = Variable(pos).to(args.device)
-                label = Variable(label).to(args.device)
-
-
-                output = net(args, data, pos)          #把data丟進網路中
-                loss = loss_func(output, label)
-                
-
-                optimizer.zero_grad()      #計算loss,初始梯度
-                loss.backward()            #反向傳播
-                optimizer.step()       
-
-                accumulate_loss += loss
-            
-            
-            print('epoch {} last loss {} accumulate_loss {} step {} avgloss {} '.format(epoch,loss,accumulate_loss,step, accumulate_loss/step),flush=True)
-
-        nets.append((neg_sampling_k, eng,net))
-    return nets
-
-
-
-def test_Neg_B_GoModel(args, data_dict, nets):
-    print('Test Neg Sampling...')
-    eng_abbrs = args.eng_abbrs
-    for neg_sampling_k, eng, net in nets :
+        # print(outs.squeeze().tolist(), labels.squeeze().tolist())
+        predicts.extend(outs.squeeze().tolist())
+        targets.extend(labels.squeeze().tolist())  
         
-        print('DataB testdataloader')
-        _DataB = DataNegSampleGoModel(args,eng,data_dict,
-            ratio = 0.9, 
-            is_train = False, 
-            neg_sampling_k = neg_sampling_k)
-
-        testdataloader = DataLoader(dataset=_DataB,
-                                    batch_size=1,
-                                    shuffle=False)
-
-
-        predicts = []
-        targets = []
-
-        print('current eng ', eng)
-        print('{} , {} , {}, {}'.format('Target', 'Predict', 'Correct (>0.5)', 'sgf'))
-        for step, (data, pos, label, _) in enumerate(testdataloader):
-            data = Variable(data).to(args.device)
-            pos = Variable(pos).to(args.device)
-            label = Variable(label).to(args.device)
-            with torch.no_grad():
-                output = net(args, data, pos)          #把data丟進網路中
-
-
-            predicts.append(output.squeeze().tolist())
-            targets.append(label.squeeze().tolist())
-
-            
-            if output.squeeze().tolist() > 0.5:
-                _output = 1
-            else:
-                _output = 0
-            correct = _output == label.squeeze().tolist()
-
-            print('{}, {}, {} , {}'.format(label.squeeze().tolist(), output.squeeze().tolist(), correct,_DataB.other_info[step][0] ))
-
-        draw_auc(targets, predicts, './result/binary_neg_sample_shuffle_{}_{}_auc.png'.format(neg_sampling_k,eng))
-
-
-
-
-def cross_compare(args,nets):
-    print('Test cross_compare...')
-    eng_abbrs = args.eng_abbrs
-    for i, eng in enumerate(eng_abbrs):
-        print('DataB testdataloader')
-        
-        _DataB = DataNegSampleGoModel(args,eng,data_dict,
-            ratio = 0.9, 
-            is_train = False, 
-            neg_sampling_k = neg_sampling_k)
+    print("Testing")
+    print("Epoch:", epoch)
+    print("Testing accuracy:", hit / total)         
+    print(hit, "/", total, "\n")
     
+    if draw:
 
-        testdataloader = DataLoader(dataset=_DataB,
-                                    batch_size=1,
-                                    shuffle=False)
+        stat = {'target': targets, 'predicts': predicts, 'sgf': [q['sgf_content'].replace('\n','') for q in _DataSimple_test.Q]}
+        df_stat = pd.DataFrame(stat)
+        df_stat.to_csv(args.csv_path,encoding='UTF-8')
 
+        # print('target, predict, sgf')
+        # for q,t,p in zip( _DataSimple_test.Q , targets, predicts):
+        #     print( '{},{},{}'.format(t,p,q['sgf_content'].replace('\n','')))
+
+        draw_auc(targets, predicts, args.result_auc)
+
+    return hit / total
+    
+def run(epochs, trainLoader, validLoader, pretrain, save_model_path='./weight'):
+    max_acc = -1.0
+    for epoch in range(epochs):
+        # training
+        train(epoch+1, trainLoader)
+        # testing
+        test_acc = test(epoch+1, validLoader)
+        if test_acc > max_acc:
+            max_acc = test_acc
+            torch.save(model.state_dict(), save_model_path)
+        if pretrain: print("Max Pretrained Testing accuracy:", max_acc, "\n")
+        else: print("Max Finetuned Testing accuracy:", max_acc, "\n")
+
+
+def gen_extra_dataset(Loader): #找d_fs裡面 被binary model 挑出來的，另行篩選。
+    model.eval()
+    r =[]
+    for step, (boards, positions) in enumerate(Loader):
+        # if step>1000:
+        #     break
+        if step%100 == 0:
+            print('#', end='',flush=True)
+        boards = Variable(boards).to(args.device)
+        positions = Variable(positions).to(args.device)
+        with torch.no_grad():
+            outs = model(args, boards, positions)
+
+        r.append( (outs.squeeze().tolist(), step) )
+
+    val = 0
+    r = sorted(r, key=lambda x: x[0])
+    for idx, tuple in enumerate(r):
+        if tuple[0] > val:
+            print('val {} accumuate index {}'.format(val, idx))
+            val += 0.1
+    print('val {} accumuate index {}'.format(val, idx))
+    
+    # print(r[-500:])
+    fout_content = []
+    for _r in r[-650:]:
+        buf = _DataSimple_extra.Q[_r[1]]
+
+        flag = 0
+
+        TagCPattern = '[^AP]C\[([^\]]*)\]'
+        comment = re.findall(TagCPattern, buf['sgf_content'])[-1]
+        #print(comment)
+        lst = comment.split(' ')        
         
-        result = {}
-        for k in eng_abbrs:
-            result[k] = []
+        for p in "做活 活棋 安全 救回 脫險".split(' '):
+            for q in lst:
+                if p == q:
+                    flag = 1
+                    break
+            if flag:
+                break
+        if flag:
+            #print('OUO')
+            continue
 
-        for j, _eng in enumerate(eng_abbrs):
-            neg_sampling_k, _, net = nets[j]
-            labels = []
-            for step, (data, pos, label, _) in enumerate(testdataloader):
-                data = Variable(data).to(args.device)
-                pos = Variable(pos).to(args.device)
-                label = Variable(label).to(args.device)
-                labels.append(label)
 
-                with torch.no_grad():
-                    output = net(args, data, pos)          #把data丟進網路中
+        buf['order_tags'] = ['lv']
+        buf['specific_terms'] = 'BinaryModel feel this board match the order tags'
+        fout_content.append(buf)
+    print(len(fout_content))
 
-                _output = output.squeeze().tolist()
+    fout_content.reverse()
 
-                result[_eng].append(_output)
+    with open(args.extra_dataset_outputpath , 'wb') as fout:
+        pickle.dump(fout_content, fout)
 
-            result['labels'] = labels
-        
-
-        for _eng in eng_abbrs:
-            print(_eng, end='\t')
-        print('')
-        for k in range(len(result[eng])):
-            print('#{} Correct LABEL {}  '.format(k, eng if result['labels'][k] == 1 else 'OT' ), end = ',')
-            for _eng in eng_abbrs:
-                print(', {} '.format(result[_eng][k]), end='')
             
-            list1 =  [ result[_eng] for _eng in eng_abbrs ]
-            print( ','+ eng_abbrs[list1.index(max(list1))] , end=',')
-            print('')
-
 
 
 if __name__ == '__main__':
-    random.seed( 918 )
-
-    parser = argparse.ArgumentParser(description = "train=0 => load and demo. train=1")
-    parser.add_argument('--device', default = 'cuda:2')
+    parser = argparse.ArgumentParser(description = "None")
+    parser.add_argument('-d', '--device', default = 'cuda')
+    parser.add_argument('--epoch', default = 3, type = int)
+    parser.add_argument('--batch_size', default = 128, type = int) 
+    parser.add_argument('--lr', default = 1e-4, type = float)
+    parser.add_argument('--hidden_size', default = 256, type = int)
     parser.add_argument('--train', default = 1, type = int)
-    parser.add_argument('--epochB', default = 10, type = int)
-    
-    # parser.add_argument('--training_pickle_filepath', 
-    #     default = '/mnt/nfs/work/yshsu0918/lal/other/test/Dataset/D_FSH_rn_training.pickle', type = str)
-    # parser.add_argument('--neg_training_pickle_filepath', 
-    #     default = '/mnt/nfs/work/yshsu0918/lal/other/test/Dataset/D_FSH_ysiftlctrn_neg_training.pickle', type = str)
-    # parser.add_argument('--eng_abbrs', default = 'rn', type = str)
-    parser.add_argument('--training_pickle_filepath', 
-        default = '/mnt/nfs/work/yshsu0918/lal/other/test/Dataset/D_FSH_ysiftlctrn_training.pickle', type = str)
-    parser.add_argument('--neg_training_pickle_filepath', 
-        default = '/mnt/nfs/work/yshsu0918/lal/other/test/Dataset/D_FSH_ysiftlctrn_neg_training.pickle', type = str)        
-    parser.add_argument('--eng_abbrs', default = 'ys,if,tl,ct,rn', type = str)
+
+    #-------當需要使用binary model 過濾資料的時候參考以下參數---------
+    # parser.add_argument('--extra_dataset', default = '', type=str)
+    parser.add_argument('--extra_dataset_outputpath', default = '../Dataset/D_FSH_extrabybinarymodel_lv.pickle', type=str)
+    parser.add_argument('--extra_dataset', default = '../bveyeconnect2trainingpickle/D_FS.pickle', type=str)
+    #----------------
+
+
+    parser.add_argument('--pickle_train', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset/D_FSHH/D_FSHHneg10_cn_train.pickle', type = str)    
+    parser.add_argument('--pickle_valid', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset/D_FSHH/D_FSHHneg10_cn_test.pickle', type = str)    
+    parser.add_argument('--pickle_test', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset/D_FSHH/D_FSHHneg10_cn_valid.pickle', type = str)    
+    parser.add_argument('--result_auc', default = './result/binary_neg10_shuffle_cn_auc.png', type = str)
+    parser.add_argument('--model_path', default = './net/0430_binary_lv_neg10.pt', type = str)
+    parser.add_argument('--csv_path', default = './0511_cn.csv', type = str)
+
+    '''
+python3 binary_neg_sampling.py \
+--pickle_train ../Dataset/D_FSHH/D_FSHHneg10_cn_train.pickle \
+--pickle_valid ../Dataset/D_FSHH/D_FSHHneg10_cn_valid.pickle \
+--pickle_test ../Dataset/D_FSHH/D_FSHHneg10_cn_test.pickle \
+--result_auc ./result/binary_neg10_cn_auc.png \
+--model_path ./net/binary_cn_neg10.pt \
+--csv_path ./log/0430_cn.csv
+
+    '''
     
     args = parser.parse_args()
-    args.eng_abbrs = args.eng_abbrs.split(',')
-    print(args)
-    abbr_filenameprefix = ''.join(args.eng_abbrs)
-
-    data_dict, _ = pickle_reader(args, shuffle=False)
-    if args.train:
-        for neg_sampling_k in [5]:
-            nets = train_Neg_B_GoModel(args,data_dict,neg_sampling_k = neg_sampling_k)
-            with open('./net/binary_negsample{}_{}_GoModel.pickle'.format(neg_sampling_k,abbr_filenameprefix), 'wb') as fout:
-                pickle.dump(nets, fout)
-            
-            print('-------TEST START--------')
-            test_Neg_B_GoModel(args,data_dict,nets)
-            print('-------TEST END--------')
-    else:
-        for neg_sampling_k in [5]:
-            with open('./net/binary_negsample{}_{}_GoModel.pickle'.format(neg_sampling_k,abbr_filenameprefix),'rb') as fin:
-                nets = pickle.load(fin)
-            print('-------TEST START--------')
-            test_Neg_B_GoModel(args,data_dict,nets)
-            print('-------TEST END--------')
+    print('Term Model Training')
+    torch.cuda.set_device(1)
     
 
+    _DataSimple_train = DataNegSample(args.pickle_train)
+    train_loader = data.DataLoader(dataset=_DataSimple_train, 
+                                    batch_size=32,
+                                    shuffle=True, 
+                                    num_workers=4, 
+                                    pin_memory=True)
 
-            #        count, TP,FP,FN,TN, correct, try1 = 0, [0]*len(thresholds), [0]*len(thresholds), [0]*len(thresholds), [0]*len(thresholds), [0]*len(thresholds), [0]*len(thresholds)
-                #print( 'Ans {} / Predict {}'.format(label.squeeze().tolist(), output.squeeze().tolist()) )
+    _DataSimple_valid = DataNegSample(args.pickle_valid)
+    valid_loader = data.DataLoader(dataset=_DataSimple_valid,
+                                batch_size=32,
+                                shuffle=True, 
+                                num_workers=4, 
+                                pin_memory=True)
 
-            # for j, threshold in enumerate(thresholds):
-            #     _output = 1.0 if output.squeeze().tolist() > threshold else 0
-            #     try1[j] += _output                
-            #     if label.squeeze().tolist() == _output:
-            #         correct[j] += 1
+    _DataSimple_test = DataNegSample(args.pickle_test)
+    test_loader = data.DataLoader(dataset=_DataSimple_test,
+                                batch_size=32,
+                                shuffle=False, 
+                                num_workers=4, 
+                                pin_memory=True)
 
-                # if label.squeeze().tolist() == 1 and _output == 1:
-                #     TP[j] += 1
-                # elif label.squeeze().tolist() == 1 and _output == 0:
-                #     FN[j] += 1
-                # elif label.squeeze().tolist() == 0 and _output == 1:
-                #     FP[j] += 1
-                # elif label.squeeze().tolist() == 0 and _output == 0:
-                #     TN[j] += 1
-                # else:
-                #     print('WTF?')
-                    
-                    
-            # count += 1
+
+    model = GoModel_lal(label_size = 1, hidden_size=256).to(args.device)
+    optim = optim.Adam(model.parameters(), lr=args.lr)
+    loss_fn = nn.BCELoss()
+
+    # Pretrain
+    if args.train:
+        run(args.epoch, train_loader, valid_loader, True,save_model_path=args.model_path)
+        test(1000, test_loader,draw=1)
+    else:
+        model.load_state_dict(torch.load(args.model_path))
         
-        # print('eng {} neg_sampling_k \t TP \t FN \t FP \t TN \t threshold \t try1 \t correct \t total \t accuracy \t' )
-        # for j, threshold in enumerate(thresholds):            
-        #     print('eng {} neg_sampling_k {} , {} , {} , {} , {} , {} , {} , {} , {} , {}'.format(eng,neg_sampling_k, TP[j],FN[j],FP[j],TN[j], threshold, try1[j] ,correct[j], count, float(correct[j])/float(count)) )
+        if args.extra_dataset != '':
+            _DataSimple_extra = DataNegSample(args.extra_dataset, need_label=False)
+            extra_loader = data.DataLoader(dataset=_DataSimple_extra,
+                                        batch_size=1,
+                                        shuffle=False, 
+                                        num_workers=4, 
+                                        pin_memory=True)
+            
+            gen_extra_dataset(extra_loader)
 
+        else:
+            test(1000, test_loader,draw=1)
+
+        
+    
+    
+    # Finetune
+    # run(args.epoch_fine, trainLoader_fine, testLoader_fine, False)
+    

@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, roc_auc_score, auc
-
+from sklearn.metrics import roc_curve, roc_auc_score, auc, confusion_matrix
+import numpy as np
+import re
+import os
 def draw_auc(targets, predicts, savefig_filename='auc.png'):
     # print(savefig_filename)
     # print(targets)
@@ -31,3 +33,29 @@ def total_hit_topk(outputs, label, k):
                 hit += 1
                 break
     return hit
+
+
+
+
+def cal_confusion_matrix(targets, predicts):
+    target_class , predict_class = [], []
+    for t,p in zip(targets, predicts):
+        target_class.append(t.index(max(t)))
+        predict_class.append(p.index(max(p)))
+
+    cm = confusion_matrix(target_class, predict_class)
+
+    print( np.matrix(cm))
+
+
+def output_predict_result_sgfs(stat, eng_abbrs, tags_ch):
+    TagCPattern = '[^AP]C\[([^\]]*)\]'
+    for i , (p,t,sgf) in enumerate(zip(stat['predicts'],stat['target'], stat['sgf'])):
+        comment = re.findall(TagCPattern, sgf)[-1]
+        sgfstr = sgf.replace(comment, 'predict:{}  target:{}'.format(tags_ch[ p.index(max(p)) ] ,tags_ch[t.index(max(t))]))
+        
+        with open(os.path.join('../tempsgf',str(i)+'.sgf'), 'w') as fout:
+            fout.write(sgfstr)
+
+    
+    
