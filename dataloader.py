@@ -325,7 +325,7 @@ class DataNegSample(Dataset):
             dataset_lst = pickle.load(fin)
 
         self.Q = dataset_lst
-        print('dataset size {} {}'.format(pickle_filepath, len(self.Q)))
+        #print('dataset size {} {}'.format(pickle_filepath, len(self.Q)))
         
 
         try:
@@ -338,8 +338,8 @@ class DataNegSample(Dataset):
                 else:
                     pass
                     # print(x['label'])
-            print( x['order_tags'], x.keys())
-            print('{} pos {} neg {} total {}'.format(pickle_filepath , pos,neg, pos+neg))
+            # print( x['order_tags'], x.keys())
+            # print('{} pos {} neg {} total {}'.format(pickle_filepath , pos,neg, pos+neg))
         except:
             print('Fail to acquire dataset stats...')
 

@@ -3,6 +3,22 @@ from sklearn.metrics import roc_curve, roc_auc_score, auc, confusion_matrix
 import numpy as np
 import re
 import os
+
+def print_confusion_as_csv(eng_abbrs, confusion_matrix):
+    _confusion_matrix = confusion_matrix.tolist()
+
+    LEN = len(eng_abbrs)
+    print('-, ', end='')
+    for abbr in eng_abbrs:
+        print(abbr ,end=', ')
+    print('')
+    for i in range(LEN):
+        print(eng_abbrs[i] ,end=', ')
+        for j in range(LEN):
+            print(_confusion_matrix[i][j] ,end=', ')
+        print('')
+
+
 def draw_auc(targets, predicts, savefig_filename='auc.png'):
     # print(savefig_filename)
     # print(targets)
@@ -45,7 +61,7 @@ def cal_confusion_matrix(targets, predicts):
 
     cm = confusion_matrix(target_class, predict_class)
 
-    print( np.matrix(cm))
+    return np.matrix(cm)
 
 
 def output_predict_result_sgfs(stat, eng_abbrs, tags_ch):

@@ -6,12 +6,11 @@ import torch.optim as optim
 import torch.utils.data as data
 from torch.autograd import Variable
 import argparse
-from analysis import draw_auc, total_hit_topk, cal_confusion_matrix, output_predict_result_sgfs
+from analysis import print_confusion_as_csv, draw_auc, total_hit_topk, cal_confusion_matrix, output_predict_result_sgfs
 from model import GoModel_lal
 from dataloader import DataNegSample
 import pandas as pd
-
-
+from sklearn.metrics import matthews_corrcoef
 
 def train(epoch, Loader):
     model.train()
@@ -69,24 +68,28 @@ def test(epoch, Loader, draw=False):
         predicts.append( [ round(x,4) for x in outs.squeeze().tolist() ] )
         targets.append(labels.squeeze().tolist())
         
-    print("Testing")
-    print("Epoch:", epoch)
-    print("Testing top1 accuracy:", hits[0] / total)         
-    for idx in range(args.label_size):
-        print('top {} acc: {}/{}'.format(idx+1,hits[idx],total))
+    # print("Testing")
+    # print("Epoch:", epoch)
+    # print("Testing top1 accuracy:", hits[0] / total)
+    # for idx in range(args.label_size):
+    #     print('top {} acc: {}/{}'.format(idx+1,hits[idx],total))
+
     
-    cal_confusion_matrix(targets, predicts)
+    confusion_matrix = cal_confusion_matrix(targets, predicts)
+    
 
     if draw:
-
         stat = {'target': targets, 'predicts': predicts, 'sgf': [q['sgf_content'].replace('\n','') for q in _DataSimple_test.Q]}
-
         output_predict_result_sgfs(stat, args.eng_abbrs, tags_ch)
-
         df_stat = pd.DataFrame(stat)
         df_stat.to_csv("0327_multiclass_ysctrnivcn.csv",encoding='UTF-8')
 
-    return hits[0] / total
+    # print(targets)
+    # print(predicts)
+
+
+
+    return targets, predicts, confusion_matrix , hits[0], total, hits[0]/total
     
 def run(epochs, trainLoader, validLoader, pretrain, save_model_path='./weight'):
     max_acc = -1.0
@@ -94,7 +97,7 @@ def run(epochs, trainLoader, validLoader, pretrain, save_model_path='./weight'):
         # training
         train(epoch+1, trainLoader)
         # testing
-        test_acc = test(epoch+1, validLoader, draw=0)
+        _,_,_,_,_,test_acc = test(epoch+1, validLoader, draw=0)
         if test_acc > max_acc:
             max_acc = test_acc
             torch.save(model.state_dict(), save_model_path)
@@ -109,16 +112,16 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default = 128, type = int) 
     parser.add_argument('--lr', default = 1e-4, type = float)
     parser.add_argument('--hidden_size', default = 256, type = int)
-    parser.add_argument('--dim_in', default = 10, type = int)    
+    parser.add_argument('--dim_in', default = 4, type = int)    
     
     # parser.add_argument('--code_size', default = 64, type = int)
     # parser.add_argument('--k_hop', default = 2, type = int)
     parser.add_argument('--train', default = 1, type = int)
-    parser.add_argument('--pickle_train', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_/bce/D_FSHH_ysctrnivlkot_train.pickle', type = str)    
-    parser.add_argument('--pickle_valid', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_/bce/D_FSHH_ysctrnivlkot_valid.pickle', type = str)    
-    parser.add_argument('--pickle_test', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_/bce/D_FSHH_ysctrnivlkot_test.pickle', type = str)    
+    parser.add_argument('--pickle_train', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_onlybw/onlybw/D_FSHH_ysctrnivlkot_train.pickle', type = str)    
+    parser.add_argument('--pickle_valid', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_onlybw/onlybw/D_FSHH_ysctrnivlkot_valid.pickle', type = str)    
+    parser.add_argument('--pickle_test', default = '/mnt/nfs/work/yshsu0918/workspace/thesis/Dataset_onlybw/onlybw/D_FSHH_ysctrnivlkot_test.pickle', type = str)    
     parser.add_argument('--eng_abbrs', default = 'ys,ct,rn,iv,lk,ot', type = str)
-    parser.add_argument('--model_path', default = './net/multiclass_ysctrnivlkot_bce.pt', type = str)
+    parser.add_argument('--model_path', default = './net/multiclass_ysctrnivlkot.pt', type = str)
     parser.add_argument('--label_size', default = 6, type = int)
     
     
@@ -133,14 +136,11 @@ if __name__ == '__main__':
     # }
 
 
-    
-
-
-
     labels = ['']
 
     args = parser.parse_args()
     args.eng_abbrs = args.eng_abbrs.split(',')
+    print(args)
 
     tags_dict = {
         "ys": "官子",
@@ -198,8 +198,20 @@ if __name__ == '__main__':
         
     else:
         model.load_state_dict(torch.load(args.model_path))
-        test(3, test_loader,draw=1)
-    
+ 
+        t1, p1, c1, hits1, total1, _ = test(3, valid_loader,draw=0)       
+        t2, p2, c2, hits2, total2, _ = test(3, test_loader,draw=0)
+
+        confusion_matrix = c1 + c2
+        hits = hits1 + hits2
+        total = total1 + total2 
+
+        tt = [ np.argmax(x) for x in t1+t2]
+        pp = [ np.argmax(x) for x in p1+p2]
+        print_confusion_as_csv(args.eng_abbrs, confusion_matrix)
+        print( 'mcc', matthews_corrcoef(tt, pp))
+
+        print( 'hits:{} total:{} acc:{}'.format( hits,total, hits/total))
     
     # Finetune
     # run(args.epoch_fine, trainLoader_fine, testLoader_fine, False)
